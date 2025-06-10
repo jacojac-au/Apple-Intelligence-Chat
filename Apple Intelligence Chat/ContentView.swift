@@ -11,7 +11,7 @@ import FoundationModels
 /// Main chat interface view
 struct ContentView: View {
     // MARK: - State Properties
-    
+
     // UI State
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -19,21 +19,23 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
-    
+
     // Model State
     @State private var session: LanguageModelSession?
     @State private var streamingTask: Task<Void, Never>?
     @State private var model = SystemLanguageModel.default
-    
+
     // Settings
     @AppStorage("useStreaming") private var useStreaming = AppSettings.useStreaming
     @AppStorage("temperature") private var temperature = AppSettings.temperature
     @AppStorage("systemInstructions") private var systemInstructions = AppSettings.systemInstructions
-    
-    // Haptics
+
+    // Haptics (iOS only)
+    #if os(iOS)
     private let hapticButtonGenerator = UIImpactFeedbackGenerator(style: .medium)
     private let hapticStreamGenerator = UISelectionFeedbackGenerator()
-    
+    #endif
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -57,7 +59,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                
+
                 // Floating Input Field
                 VStack {
                     Spacer()
@@ -66,8 +68,12 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Apple Intelligence Chat")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
+            #endif
+            .toolbar {
+                toolbarContent
+            }
             .sheet(isPresented: $showSettings) {
                 SettingsView {
                     session = nil // Reset session on settings change
@@ -80,9 +86,9 @@ struct ContentView: View {
             }
         }
     }
-    
+
     // MARK: - Subviews
-    
+
     /// Floating input field with send/stop button
     private var inputField: some View {
         ZStack {
@@ -97,7 +103,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(16)
-            
+
             HStack {
                 Spacer()
                 Button(action: handleSendOrStop) {
@@ -114,26 +120,45 @@ struct ContentView: View {
         }
         .glassEffect(.regular.interactive())
     }
-    
+
     private var isSendButtonDisabled: Bool {
         return inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isResponding
     }
-    
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        #if os(iOS)
         ToolbarItem(placement: .navigationBarLeading) {
-            Button(action: resetConversation) { Label("New Chat", systemImage: "square.and.pencil") }
+            Button(action: resetConversation) {
+                Label("New Chat", systemImage: "square.and.pencil")
+            }
         }
         ToolbarItem(placement: .navigationBarTrailing) {
-            Button(action: { showSettings = true }) { Label("Settings", systemImage: "gearshape") }
+            Button(action: { showSettings = true }) {
+                Label("Settings", systemImage: "gearshape")
+            }
         }
+        #else
+        ToolbarItem {
+            Button(action: resetConversation) {
+                Text("New Chat")
+            }
+        }
+        ToolbarItem {
+            Button(action: { showSettings = true }) {
+                Text("Settings")
+            }
+        }
+        #endif
     }
-    
+
     // MARK: - Model Interaction
-    
+
     private func handleSendOrStop() {
+        #if os(iOS)
         hapticButtonGenerator.impactOccurred()
-        
+        #endif
+
         if isResponding {
             stopStreaming()
         } else {
@@ -144,35 +169,41 @@ struct ContentView: View {
             sendMessage()
         }
     }
-    
+
     private func sendMessage() {
         isResponding = true
         let userMessage = ChatMessage(role: .user, text: inputText)
         messages.append(userMessage)
         let prompt = inputText
         inputText = ""
-        
+
         // Add empty assistant message for streaming
         messages.append(ChatMessage(role: .assistant, text: ""))
-        
+
+        #if os(iOS)
         hapticStreamGenerator.prepare()
-        
+        #endif
+
         streamingTask = Task {
             do {
-                if session == nil { session = createSession() }
-                
+                if session == nil {
+                    session = createSession()
+                }
+
                 guard let currentSession = session else {
                     showError(message: "Session could not be created.")
                     isResponding = false
                     return
                 }
-                
+
                 let options = GenerationOptions(temperature: temperature)
-                
+
                 if useStreaming {
                     let stream = currentSession.streamResponse(to: prompt, options: options)
                     for try await partialResponse in stream {
+                        #if os(iOS)
                         hapticStreamGenerator.selectionChanged()
+                        #endif
                         updateLastMessage(with: partialResponse)
                     }
                 } else {
@@ -184,54 +215,56 @@ struct ContentView: View {
             } catch {
                 showError(message: "An error occurred: \(error.localizedDescription)")
             }
-            
+
             isResponding = false
             streamingTask = nil
         }
     }
-    
+
     private func stopStreaming() {
         streamingTask?.cancel()
     }
-    
+
     @MainActor
     private func updateLastMessage(with text: String) {
         messages[messages.count - 1].text = text
     }
-    
+
     // MARK: - Session & Helpers
-    
+
     private func createSession() -> LanguageModelSession {
         return LanguageModelSession(instructions: systemInstructions)
     }
-    
+
     private func resetConversation() {
+        #if os(iOS)
         hapticButtonGenerator.impactOccurred()
+        #endif
         stopStreaming()
         messages.removeAll()
         session = nil
     }
-    
+
     private func availabilityDescription(for availability: SystemLanguageModel.Availability) -> String {
         switch availability {
-            case .available:
-                return "Available"
-            case .unavailable(let reason):
-                switch reason {
-                    case .deviceNotEligible:
-                        return "Device not eligible"
-                    case .appleIntelligenceNotEnabled:
-                        return "Apple Intelligence not enabled in Settings"
-                    case .modelNotReady:
-                        return "Model assets not downloaded"
-                    @unknown default:
-                        return "Unknown reason"
-                }
+        case .available:
+            return "Available"
+        case .unavailable(let reason):
+            switch reason {
+            case .deviceNotEligible:
+                return "Device not eligible"
+            case .appleIntelligenceNotEnabled:
+                return "Apple Intelligence not enabled in Settings"
+            case .modelNotReady:
+                return "Model assets not downloaded"
             @unknown default:
-                return "Unknown availability"
+                return "Unknown reason"
+            }
+        @unknown default:
+            return "Unknown availability"
         }
     }
-    
+
     @MainActor
     private func showError(message: String) {
         self.errorMessage = message
@@ -243,3 +276,4 @@ struct ContentView: View {
 #Preview {
     ContentView()
 }
+
